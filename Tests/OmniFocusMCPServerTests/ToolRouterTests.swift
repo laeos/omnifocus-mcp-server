@@ -265,7 +265,7 @@ struct ToolRouterTests {
 
     private func extractText(_ result: CallTool.Result) -> String {
         result.content.compactMap { content in
-            if case .text(let text) = content {
+            if case .text(let text, _, _) = content {
                 return text
             }
             return nil

@@ -316,6 +316,96 @@ struct ToolRouterTests {
         #expect(!text.contains("invalid_input"))
     }
 
+    // MARK: - Perspective Rules
+
+    @Test("get_perspective_rules requires id")
+    func getPerspectiveRulesNoId() async {
+        let (router, _) = await makeRouter()
+        let result = await router.handle(name: "get_perspective_rules", arguments: [:])
+        #expect(extractText(result).contains("invalid_input"))
+    }
+
+    @Test("get_perspective_rules returns rules")
+    func getPerspectiveRulesHappy() async {
+        let (router, bridge) = await makeRouter()
+        bridge.jsResults["archivedFilterRules"] = """
+        {"id": "p1", "name": "Today", "aggregation": "any", "rules": [{"actionAvailability": "available"}]}
+        """
+        let result = await router.handle(name: "get_perspective_rules", arguments: ["id": .string("p1")])
+        let text = extractText(result)
+        #expect(text.contains("actionAvailability"))
+        #expect(result.isError != true)
+    }
+
+    @Test("update_perspective_rules requires id and rules")
+    func updatePerspectiveRulesMissingArgs() async {
+        let (router, _) = await makeRouter()
+        let noId = await router.handle(name: "update_perspective_rules", arguments: [
+            "rules": .array([.object(["actionAvailability": .string("available")])]),
+        ])
+        #expect(extractText(noId).contains("invalid_input"))
+
+        let noRules = await router.handle(name: "update_perspective_rules", arguments: [
+            "id": .string("p1"),
+        ])
+        #expect(extractText(noRules).contains("invalid_input"))
+    }
+
+    @Test("update_perspective_rules rejects non-object rule entries")
+    func updatePerspectiveRulesBadEntries() async {
+        let (router, _) = await makeRouter()
+        let result = await router.handle(name: "update_perspective_rules", arguments: [
+            "id": .string("p1"),
+            "rules": .array([.string("available")]),
+        ])
+        #expect(extractText(result).contains("invalid_input"))
+    }
+
+    @Test("update_perspective_rules rejects bad aggregation")
+    func updatePerspectiveRulesBadAggregation() async {
+        let (router, _) = await makeRouter()
+        let result = await router.handle(name: "update_perspective_rules", arguments: [
+            "id": .string("p1"),
+            "rules": .array([.object(["actionAvailability": .string("available")])]),
+            "aggregation": .string("sometimes"),
+        ])
+        #expect(extractText(result).contains("invalid_input"))
+    }
+
+    @Test("update_perspective_rules applies rules and flags unknown keys")
+    func updatePerspectiveRulesHappyWithWarning() async {
+        let (router, bridge) = await makeRouter()
+        bridge.jsResults["archivedFilterRules"] = """
+        {"id": "p1", "name": "Today", "aggregation": "all", "rules": [{"actionAvailability": "available"}]}
+        """
+        let result = await router.handle(name: "update_perspective_rules", arguments: [
+            "id": .string("p1"),
+            "rules": .array([
+                .object(["actionAvailability": .string("available")]),
+                .object(["madeUpKey": .string("x")]),
+            ]),
+            "aggregation": .string("all"),
+        ])
+        let text = extractText(result)
+        #expect(result.isError != true)
+        #expect(text.contains("warnings"))
+        #expect(text.contains("madeUpKey"))
+    }
+
+    @Test("update_perspective_rules surfaces no_window error")
+    func updatePerspectiveRulesNoWindow() async {
+        let (router, bridge) = await makeRouter()
+        bridge.jsResults["document.windows"] = """
+        {"error": "no_window", "message": "OmniFocus has no open windows."}
+        """
+        let result = await router.handle(name: "update_perspective_rules", arguments: [
+            "id": .string("p1"),
+            "rules": .array([.object(["actionAvailability": .string("available")])]),
+        ])
+        #expect(result.isError == true)
+        #expect(extractText(result).contains("no open windows"))
+    }
+
     @Test("unknown tool returns error")
     func unknownTool() async {
         let (router, _) = await makeRouter()

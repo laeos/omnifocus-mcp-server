@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-05
+
+### Added
+
+- `get_perspective_rules` tool — read a custom perspective's `archivedFilterRules` and top-level aggregation (works headlessly)
+- `update_perspective_rules` tool — replace a custom perspective's filter rules (and optionally aggregation) using the Omni Automation archive format. Writes go through the window's active perspective (the only path that persists), so an open OmniFocus window is required; unrecognized rule keys are surfaced as warnings
+
+### Notes
+
+- Creating a perspective is not possible via automation (OmniFocus exposes no constructor and `name` is read-only). Create the empty perspective once in the app, then manage its rules with `update_perspective_rules`
+
 ## [0.3.0] - 2026-07-05
 
 ### Added
@@ -98,6 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Safety controls** — Dry-run defaults, single-use confirm tokens (5-minute TTL), config-gated batch/delete operations, tool allowlist
 - **CI/CD** — GitHub Actions for build/test/lint on push, automated universal binary releases on tag
 
+[0.4.0]: https://github.com/mryanb/omnifocus-mcp-server/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/mryanb/omnifocus-mcp-server/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/mryanb/omnifocus-mcp-server/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/mryanb/omnifocus-mcp-server/compare/v0.2.0...v0.2.1

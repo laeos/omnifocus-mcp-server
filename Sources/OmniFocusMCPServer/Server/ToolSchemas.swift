@@ -19,6 +19,7 @@ enum ToolSchemas {
             tools.append(listTagsTool)
             tools.append(listPerspectivesTool)
             tools.append(getPerspectiveTasksTool)
+            tools.append(getPerspectiveRulesTool)
             tools.append(getTaskByIdTool)
             tools.append(searchTasksTool)
             tools.append(getTaskCountTool)
@@ -28,6 +29,7 @@ enum ToolSchemas {
             tools.append(updateTaskTool)
             tools.append(createProjectTool)
             tools.append(updateProjectTool)
+            tools.append(updatePerspectiveRulesTool)
 
             // Batch tools (config-gated)
             if config.bulkOpsEnabled {
@@ -259,6 +261,51 @@ enum ToolSchemas {
             "additionalProperties": false,
         ]),
         annotations: Tool.Annotations(readOnlyHint: true, destructiveHint: false)
+    )
+
+    static let getPerspectiveRulesTool = Tool(
+        name: "get_perspective_rules",
+        description: "Get the filter rules and top-level aggregation of a custom perspective. Only custom perspectives have editable rules (built-in perspectives do not).",
+        inputSchema: .object([
+            "type": "object",
+            "properties": .object([
+                "id": .object([
+                    "type": "string",
+                    "description": "Custom perspective primaryKey (from list_perspectives) or its exact name",
+                ]),
+            ]),
+            "required": .array([.string("id")]),
+            "additionalProperties": false,
+        ]),
+        annotations: Tool.Annotations(readOnlyHint: true, destructiveHint: false)
+    )
+
+    static let updatePerspectiveRulesTool = Tool(
+        name: "update_perspective_rules",
+        description: "Replace a custom perspective's filter rules (and optionally its top-level aggregation). Rules use the Omni Automation archive format, e.g. [{\"actionAvailability\":\"available\"},{\"actionHasAnyOfTags\":[\"<tagId>\"]}]. Requires an open OmniFocus window; the perspective may need to be reopened in the UI to reflect changes. Note: creating a new perspective is not possible via automation — create it once in the app, then manage its rules here.",
+        inputSchema: .object([
+            "type": "object",
+            "properties": .object([
+                "id": .object([
+                    "type": "string",
+                    "description": "Custom perspective primaryKey (from list_perspectives) or its exact name",
+                ]),
+                "rules": .object([
+                    "type": "array",
+                    "items": .object(["type": "object"]),
+                    "description": "Filter rule objects (the archivedFilterRules array). Replaces the existing rules wholesale",
+                    "minItems": 1,
+                ]),
+                "aggregation": .object([
+                    "type": "string",
+                    "enum": .array(["all", "any", "none"].map { Value.string($0) }),
+                    "description": "Top-level rule aggregation (archivedTopLevelFilterAggregation). Omit to leave unchanged",
+                ]),
+            ]),
+            "required": .array([.string("id"), .string("rules")]),
+            "additionalProperties": false,
+        ]),
+        annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: true, idempotentHint: true)
     )
 
     static let getTaskByIdTool = Tool(

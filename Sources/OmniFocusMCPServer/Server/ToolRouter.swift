@@ -36,6 +36,7 @@ actor ToolRouter {
         let proRequired: Set<String> = [
             "list_inbox", "list_today", "list_flagged", "list_forecast",
             "list_projects", "list_tags", "list_perspectives", "get_perspective_tasks",
+            "get_perspective_rules", "update_perspective_rules",
             "get_task_by_id", "search_tasks", "get_task_count",
             "create_task", "update_task", "create_project", "update_project", "batch_update_tasks",
         ]
@@ -63,6 +64,10 @@ actor ToolRouter {
                 return try await handleListPerspectives()
             case "get_perspective_tasks":
                 return try await handleGetPerspectiveTasks(arguments)
+            case "get_perspective_rules":
+                return try await handleGetPerspectiveRules(arguments)
+            case "update_perspective_rules":
+                return try await handleUpdatePerspectiveRules(arguments)
             case "get_task_by_id":
                 return try await handleGetTaskById(arguments)
             case "search_tasks":
@@ -249,6 +254,79 @@ actor ToolRouter {
         let response = wrapPagination(result, limit: limit, offset: offset)
         await cache.set(key: cacheKey, value: response, ttl: CacheTTL.today)
         return textResult(response)
+    }
+
+    private func handleGetPerspectiveRules(_ args: [String: Value]?) async throws -> CallTool.Result {
+        guard let id = args?["id"]?.stringValue, !id.isEmpty else {
+            throw OFMCPError.invalidInput("'id' is required (custom perspective primaryKey or name)")
+        }
+        let cacheKey = TTLCache.key(tool: "get_perspective_rules", args: ["id": id])
+        if let cached = await cache.get(key: cacheKey) {
+            return textResult(cached)
+        }
+
+        let js = JSBuilder.getPerspectiveRules(id: id)
+        let result = try await bridge.evaluateJS(js)
+
+        if result.contains("\"error\"") && result.contains("not_found") {
+            throw OFMCPError.invalidInput("Custom perspective not found: \(id). Only custom perspectives have editable rules; use list_perspectives to find IDs.")
+        }
+
+        await cache.set(key: cacheKey, value: result, ttl: CacheTTL.tags)
+        return textResult(result)
+    }
+
+    private func handleUpdatePerspectiveRules(_ args: [String: Value]?) async throws -> CallTool.Result {
+        guard let id = args?["id"]?.stringValue, !id.isEmpty else {
+            throw OFMCPError.invalidInput("'id' is required (custom perspective primaryKey or name)")
+        }
+        guard let rulesArray = args?["rules"]?.arrayValue, !rulesArray.isEmpty else {
+            throw OFMCPError.invalidInput("'rules' is required and must be a non-empty array of rule objects")
+        }
+        for rule in rulesArray where rule.objectValue == nil {
+            throw OFMCPError.invalidInput("Each entry in 'rules' must be an object, e.g. {\"actionAvailability\": \"available\"}")
+        }
+
+        let aggregation = args?["aggregation"]?.stringValue
+        if let aggregation, !["all", "any", "none"].contains(aggregation) {
+            throw OFMCPError.invalidInput("'aggregation' must be one of: all, any, none")
+        }
+
+        // Serialize the validated rules to a JSON literal for embedding in the JS.
+        let anyRules = rulesArray.map { valueToAny($0) }
+        guard let data = try? JSONSerialization.data(withJSONObject: anyRules),
+              let rulesJSON = String(data: data, encoding: .utf8)
+        else {
+            throw OFMCPError.invalidInput("'rules' could not be serialized to JSON")
+        }
+
+        // Soft check: surface rule keys not in the documented vocabulary as warnings.
+        let warnings = unknownRuleKeyWarnings(rulesArray)
+
+        let js = JSBuilder.updatePerspectiveRules(id: id, rulesJSON: rulesJSON, aggregation: aggregation)
+        let result = try await bridge.evaluateJS(js)
+
+        if result.contains("\"error\"") {
+            if result.contains("no_window") {
+                throw OFMCPError.omnifocusEvalFailed("OmniFocus has no open windows. Open a window and try again.")
+            }
+            if result.contains("not_found") {
+                throw OFMCPError.invalidInput("Custom perspective not found: \(id)")
+            }
+            throw OFMCPError.omnifocusEvalFailed(jsErrorMessage(result) ?? result)
+        }
+
+        await cache.invalidateAll()
+        Log.info("Perspective rules updated: \(id)", tool: "update_perspective_rules")
+
+        // Merge warnings into the response without dropping the perspective payload.
+        if !warnings.isEmpty,
+           let data = result.data(using: .utf8),
+           var dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            dict["warnings"] = warnings
+            return textResult(toJSON(dict))
+        }
+        return textResult(result)
     }
 
     private func handleListProjects(_ args: [String: Value]?) async throws -> CallTool.Result {
@@ -800,6 +878,55 @@ actor ToolRouter {
             }
         }
         return dict
+    }
+
+    /// Recursively convert a Value to a JSON-serializable Foundation value.
+    private func valueToAny(_ value: Value) -> Any {
+        switch value {
+        case .string(let s): return s
+        case .int(let i): return i
+        case .double(let d): return d
+        case .bool(let b): return b
+        case .null: return NSNull()
+        case .array(let arr): return arr.map { valueToAny($0) }
+        case .object(let obj):
+            var dict: [String: Any] = [:]
+            for (key, val) in obj { dict[key] = valueToAny(val) }
+            return dict
+        default: return NSNull()
+        }
+    }
+
+    // MARK: - Perspective Rule Vocabulary
+
+    /// Documented custom-perspective rule keys (omni-automation.com). Unrecognized keys
+    /// are still written through, but surfaced as warnings so malformed archives are visible.
+    private static let knownRuleKeys: Set<String> = [
+        "actionAvailability", "actionStatus", "actionCompleted", "actionFlagged",
+        "actionHasAnyOfTags", "actionHasAllOfTags", "actionHasNoneOfTags", "actionHasNoTags",
+        "actionDateField", "actionWithinFocus", "actionMatchingSearch",
+        "actionHasDueDate", "actionHasDeferDate", "actionHasEstimatedDuration",
+        "aggregateType", "rules", "disabledRule",
+    ]
+
+    /// Collect rule keys not in the documented vocabulary, recursing into `disabledRule`
+    /// and nested `aggregateType` rule groups.
+    private func unknownRuleKeyWarnings(_ rules: [Value]) -> [String] {
+        var unknown: Set<String> = []
+        func walk(_ rule: Value) {
+            guard let obj = rule.objectValue else { return }
+            for (key, val) in obj {
+                if key == "rules", let nested = val.arrayValue {
+                    nested.forEach(walk)
+                } else if key == "disabledRule" {
+                    walk(val)
+                } else if !ToolRouter.knownRuleKeys.contains(key) {
+                    unknown.insert(key)
+                }
+            }
+        }
+        rules.forEach(walk)
+        return unknown.sorted().map { "Unrecognized rule key '\($0)' — written as-is; a malformed archive may confuse OmniFocus." }
     }
 
     // MARK: - Repetition Rule Helpers

@@ -170,6 +170,88 @@ struct ToolRouterTests {
         #expect(text.contains("invalid_input"))
     }
 
+    @Test("create_project requires name parameter")
+    func createProjectNoName() async {
+        let (router, _) = await makeRouter()
+        let result = await router.handle(name: "create_project", arguments: [:])
+        let text = extractText(result)
+        #expect(text.contains("invalid_input"))
+    }
+
+    @Test("create_project returns new project")
+    func createProjectHappyPath() async {
+        let (router, bridge) = await makeRouter()
+        bridge.jsResults["new Project"] = """
+        {"id": "proj-new", "name": "Finance", "folderId": null, "folderName": null, "sequential": false, "singleton": false, "url": "omnifocus:///task/proj-new"}
+        """
+        let result = await router.handle(name: "create_project", arguments: [
+            "name": .string("Finance"),
+        ])
+        let text = extractText(result)
+        #expect(text.contains("proj-new"))
+        #expect(result.isError != true)
+    }
+
+    @Test("create_project rejects bad reviewInterval")
+    func createProjectBadReview() async {
+        let (router, _) = await makeRouter()
+        let result = await router.handle(name: "create_project", arguments: [
+            "name": .string("P"),
+            "reviewInterval": .object(["unit": .string("weeks")]),
+        ])
+        let text = extractText(result)
+        #expect(text.contains("invalid_input"))
+    }
+
+    @Test("create_task rejects malformed RRULE")
+    func createTaskBadRRule() async {
+        let (router, _) = await makeRouter()
+        let result = await router.handle(name: "create_task", arguments: [
+            "name": .string("Recurring"),
+            "repetitionRule": .object(["ruleString": .string("every month")]),
+        ])
+        let text = extractText(result)
+        #expect(text.contains("invalid_input"))
+        #expect(text.contains("FREQ="))
+    }
+
+    @Test("create_task accepts valid repetition rule")
+    func createTaskGoodRRule() async {
+        let (router, _) = await makeRouter()
+        let result = await router.handle(name: "create_task", arguments: [
+            "name": .string("Pay rent"),
+            "repetitionRule": .object([
+                "ruleString": .string("FREQ=MONTHLY;BYMONTHDAY=26"),
+                "method": .string("fixed"),
+            ]),
+        ])
+        let text = extractText(result)
+        #expect(!text.contains("invalid_input"))
+    }
+
+    @Test("update_task rejects malformed RRULE in patch")
+    func updateTaskBadRRule() async {
+        let (router, _) = await makeRouter()
+        let result = await router.handle(name: "update_task", arguments: [
+            "id": .string("abc"),
+            "patch": .object(["repetitionRule": .object(["ruleString": .string("weekly")])]),
+        ])
+        let text = extractText(result)
+        #expect(text.contains("invalid_input"))
+    }
+
+    @Test("update_task accepts clearing repetition rule")
+    func updateTaskClearRRule() async {
+        let (router, _) = await makeRouter()
+        let result = await router.handle(name: "update_task", arguments: [
+            "id": .string("abc"),
+            "patch": .object(["repetitionRule": .null]),
+        ])
+        let text = extractText(result)
+        // Clearing (null) is not a destructive status change and passes validation
+        #expect(!text.contains("invalid_input"))
+    }
+
     @Test("unknown tool returns error")
     func unknownTool() async {
         let (router, _) = await makeRouter()

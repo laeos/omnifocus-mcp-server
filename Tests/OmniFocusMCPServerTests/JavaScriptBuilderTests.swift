@@ -116,6 +116,158 @@ struct JavaScriptBuilderTests {
         #expect(!js.contains("new Task(name:"))
     }
 
+    @Test("createTask with repetition rule")
+    func createTaskRepetition() {
+        let js = JSBuilder.createTask(
+            name: "Pay rent",
+            note: nil, projectId: nil, parentId: nil,
+            tagIds: nil, tagNames: nil, dueDate: nil, deferDate: nil,
+            flagged: nil, estimatedMinutes: nil,
+            repetitionRuleString: "FREQ=MONTHLY;BYMONTHDAY=26",
+            repetitionMethod: "fixed"
+        )
+        #expect(js.contains("new Task.RepetitionRule(\"FREQ=MONTHLY;BYMONTHDAY=26\", Task.RepetitionMethod.Fixed)"))
+    }
+
+    @Test("createTask repetition method mapping")
+    func createTaskRepetitionMethods() {
+        let start = JSBuilder.createTask(
+            name: "T", note: nil, projectId: nil, parentId: nil,
+            tagIds: nil, tagNames: nil, dueDate: nil, deferDate: nil,
+            flagged: nil, estimatedMinutes: nil,
+            repetitionRuleString: "FREQ=WEEKLY", repetitionMethod: "start-after-completion"
+        )
+        #expect(start.contains("Task.RepetitionMethod.DeferUntilDate"))
+
+        let due = JSBuilder.createTask(
+            name: "T", note: nil, projectId: nil, parentId: nil,
+            tagIds: nil, tagNames: nil, dueDate: nil, deferDate: nil,
+            flagged: nil, estimatedMinutes: nil,
+            repetitionRuleString: "FREQ=WEEKLY", repetitionMethod: "due-after-completion"
+        )
+        #expect(due.contains("Task.RepetitionMethod.DueDate"))
+    }
+
+    @Test("createTask repetition generates valid JS")
+    func createTaskRepetitionJSSyntax() {
+        assertValidJSSyntax(JSBuilder.createTask(
+            name: "Recurring \"task\"", note: "note", projectId: "p1", parentId: nil,
+            tagIds: nil, tagNames: ["Home"], dueDate: "2026-03-15T17:00:00Z", deferDate: nil,
+            flagged: true, estimatedMinutes: 15,
+            repetitionRuleString: "FREQ=MONTHLY;BYMONTHDAY=26", repetitionMethod: "due-after-completion"
+        ))
+    }
+
+    @Test("updateTask sets and clears repetition rule")
+    func updateTaskRepetition() {
+        let jsSet = JSBuilder.updateTask(id: "abc", patch: [
+            "repetitionRule": ["ruleString": "FREQ=DAILY", "method": "fixed"] as [String: Any],
+        ])
+        #expect(jsSet.contains("new Task.RepetitionRule(\"FREQ=DAILY\", Task.RepetitionMethod.Fixed)"))
+
+        let jsClear = JSBuilder.updateTask(id: "abc", patch: ["repetitionRule": NSNull()])
+        #expect(jsClear.contains("t.repetitionRule = null;"))
+    }
+
+    @Test("updateTask repetition generates valid JS")
+    func updateTaskRepetitionJSSyntax() {
+        assertValidJSSyntax(JSBuilder.updateTask(id: "abc", patch: [
+            "repetitionRule": ["ruleString": "FREQ=WEEKLY;BYDAY=MO", "method": "start-after-completion"] as [String: Any],
+        ]))
+        assertValidJSSyntax(JSBuilder.updateTask(id: "abc", patch: ["repetitionRule": NSNull()]))
+    }
+
+    @Test("task projection includes repetitionRule when requested")
+    func repetitionRuleProjection() {
+        let js = JSBuilder.getTaskById(id: "id1", fields: [.id, .name, .repetitionRule])
+        #expect(js.contains("repetitionRule:"))
+        #expect(js.contains("t.repetitionRule.ruleString"))
+        assertValidJSSyntax(js)
+    }
+
+    // MARK: - createProject Tests
+
+    @Test("createProject at top level")
+    func createProjectTopLevel() {
+        let js = JSBuilder.createProject(
+            name: "New Project", note: "desc", singleton: nil, sequential: true,
+            folderId: nil, folderName: nil, dueDate: nil, deferDate: nil,
+            reviewIntervalUnit: nil, reviewIntervalSteps: nil
+        )
+        #expect(js.contains("const container = null;"))
+        #expect(js.contains("new Project(\"New Project\")"))
+        #expect(js.contains("p.note = \"desc\""))
+        #expect(js.contains("p.sequential = true"))
+    }
+
+    @Test("createProject in existing folder by id")
+    func createProjectFolderId() {
+        let js = JSBuilder.createProject(
+            name: "P", note: nil, singleton: nil, sequential: nil,
+            folderId: "fold1", folderName: nil, dueDate: nil, deferDate: nil,
+            reviewIntervalUnit: nil, reviewIntervalSteps: nil
+        )
+        #expect(js.contains("Folder.byIdentifier(\"fold1\")"))
+        #expect(js.contains("new Project(\"P\", container)"))
+    }
+
+    @Test("createProject creates folder by name if missing")
+    func createProjectFolderName() {
+        let js = JSBuilder.createProject(
+            name: "P", note: nil, singleton: nil, sequential: nil,
+            folderId: nil, folderName: "Finance", dueDate: nil, deferDate: nil,
+            reviewIntervalUnit: nil, reviewIntervalSteps: nil
+        )
+        #expect(js.contains("flattenedFolders.byName(\"Finance\")"))
+        #expect(js.contains("new Folder(\"Finance\")"))
+    }
+
+    @Test("createProject singleton sets containsSingletonActions")
+    func createProjectSingleton() {
+        let js = JSBuilder.createProject(
+            name: "Errands", note: nil, singleton: true, sequential: true,
+            folderId: nil, folderName: nil, dueDate: nil, deferDate: nil,
+            reviewIntervalUnit: nil, reviewIntervalSteps: nil
+        )
+        #expect(js.contains("p.containsSingletonActions = true"))
+        // sequential should be ignored when singleton is set
+        #expect(!js.contains("p.sequential ="))
+    }
+
+    @Test("createProject with review interval")
+    func createProjectReviewInterval() {
+        let js = JSBuilder.createProject(
+            name: "P", note: nil, singleton: nil, sequential: nil,
+            folderId: nil, folderName: nil, dueDate: nil, deferDate: nil,
+            reviewIntervalUnit: "weeks", reviewIntervalSteps: 2
+        )
+        #expect(js.contains("ri.unit = \"weeks\""))
+        #expect(js.contains("ri.steps = 2"))
+        #expect(js.contains("p.reviewInterval = ri"))
+    }
+
+    @Test("createProject generates valid JS")
+    func createProjectJSSyntax() {
+        // Top level, all props
+        assertValidJSSyntax(JSBuilder.createProject(
+            name: "Project \"X\"", note: "note\nwith newline", singleton: false, sequential: true,
+            folderId: nil, folderName: nil, dueDate: "2026-04-01T17:00:00Z", deferDate: "2026-03-15T09:00:00Z",
+            reviewIntervalUnit: "months", reviewIntervalSteps: 1
+        ))
+        // Folder by id
+        assertValidJSSyntax(JSBuilder.createProject(
+            name: "P", note: nil, singleton: true, sequential: nil,
+            folderId: "f1", folderName: nil, dueDate: nil, deferDate: nil,
+            reviewIntervalUnit: nil, reviewIntervalSteps: nil
+        ))
+        // Folder by name
+        assertValidJSSyntax(JSBuilder.createProject(
+            name: "P", note: nil, singleton: nil, sequential: false,
+            folderId: nil, folderName: "Home & Garden", dueDate: nil, deferDate: nil,
+            reviewIntervalUnit: nil, reviewIntervalSteps: nil
+        ))
+    }
+
     @Test("updateTask applies patch fields")
     func updateTask() {
         let js = JSBuilder.updateTask(id: "abc123", patch: [

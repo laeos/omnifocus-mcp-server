@@ -21,6 +21,7 @@ struct OFTask: Codable, Hashable, Sendable {
     var tagNames: [String]?
     var hasChildren: Bool?
     var sequential: Bool?
+    var repetitionRule: OFRepetitionRule?
     var url: String?
 }
 
@@ -31,13 +32,27 @@ enum TaskStatus: String, Codable, Hashable, Sendable {
     case blocked
 }
 
+/// A task's recurrence, mirroring OmniFocus's `Task.RepetitionRule`.
+/// `ruleString` is an ICS RRULE (e.g. "FREQ=MONTHLY;BYMONTHDAY=26").
+struct OFRepetitionRule: Codable, Hashable, Sendable {
+    let ruleString: String
+    let method: RepetitionMethod
+}
+
+/// How a repeat is scheduled relative to completion, mirroring `Task.RepetitionMethod`.
+enum RepetitionMethod: String, Codable, Hashable, Sendable {
+    case fixed
+    case startAfterCompletion = "start-after-completion"
+    case dueAfterCompletion = "due-after-completion"
+}
+
 /// Field sets for task projection.
 enum TaskFieldSet: String, CaseIterable, Sendable {
     case id, name, note, status, flagged, completed, dropped
     case dueDate, deferDate, completionDate, estimatedMinutes
     case projectId, projectName, parentId
     case tagIds, tagNames
-    case hasChildren, sequential, url
+    case hasChildren, sequential, repetitionRule, url
 }
 
 extension TaskFieldSet {

@@ -37,7 +37,7 @@ actor ToolRouter {
             "list_inbox", "list_today", "list_flagged", "list_forecast",
             "list_projects", "list_tags", "list_perspectives", "get_perspective_tasks",
             "get_task_by_id", "search_tasks", "get_task_count",
-            "create_task", "update_task", "update_project", "batch_update_tasks",
+            "create_task", "update_task", "create_project", "update_project", "batch_update_tasks",
         ]
         if proRequired.contains(name) && mode != .pro {
             return errorResult(OFMCPError.proRequired(name).structured)
@@ -73,6 +73,8 @@ actor ToolRouter {
                 return try await handleCreateTask(arguments)
             case "update_task":
                 return try await handleUpdateTask(arguments)
+            case "create_project":
+                return try await handleCreateProject(arguments)
             case "update_project":
                 return try await handleUpdateProject(arguments)
             case "batch_update_tasks":
@@ -362,6 +364,17 @@ actor ToolRouter {
             throw OFMCPError.invalidInput("'name' is required and must not be empty")
         }
 
+        let (ruleString, method) = try parseRepetitionRule(args?["repetitionRule"])
+        if ruleString != nil {
+            // OmniFocus requires a matching date for a repeat; validate up front so we
+            // never create a dateless task with an invalid rule (which pops an app alert).
+            try validateRepetitionDates(
+                method: method,
+                hasDue: args?["dueDate"]?.stringValue != nil,
+                hasDefer: args?["deferDate"]?.stringValue != nil
+            )
+        }
+
         let js = JSBuilder.createTask(
             name: name,
             note: args?["note"]?.stringValue,
@@ -372,7 +385,9 @@ actor ToolRouter {
             dueDate: args?["dueDate"]?.stringValue,
             deferDate: args?["deferDate"]?.stringValue,
             flagged: args?["flagged"]?.boolValue,
-            estimatedMinutes: args?["estimatedMinutes"]?.intValue
+            estimatedMinutes: args?["estimatedMinutes"]?.intValue,
+            repetitionRuleString: ruleString,
+            repetitionMethod: method
         )
 
         let result = try await bridge.evaluateJS(js)
@@ -402,6 +417,11 @@ actor ToolRouter {
 
         // Convert patch Value to [String: Any]
         let patch = valueToDictionary(patchValue)
+
+        // Validate a repetition rule when the patch sets (not clears) one.
+        if let rule = patch["repetitionRule"] as? [String: Any] {
+            try validateRepetitionRule(ruleString: rule["ruleString"] as? String, method: rule["method"] as? String)
+        }
 
         let requiresConfirm = patchRequiresConfirmation(patch)
         let patchHash = ConfirmTokenManager.hashPatch(patch)
@@ -439,12 +459,58 @@ actor ToolRouter {
         let js = JSBuilder.updateTask(id: id, patch: patch)
         let result = try await bridge.evaluateJS(js)
 
-        if result.contains("\"error\"") && result.contains("not_found") {
-            throw OFMCPError.taskNotFound(id)
+        if result.contains("\"error\"") {
+            if result.contains("not_found") {
+                throw OFMCPError.taskNotFound(id)
+            }
+            if result.contains("repetition_requires_date") {
+                throw OFMCPError.invalidInput(jsErrorMessage(result) ?? "This repeat requires a defer date or a due date.")
+            }
+            throw OFMCPError.omnifocusEvalFailed(result)
         }
 
         await cache.invalidateAll()
         Log.info("Task updated: \(id)", tool: "update_task")
+
+        return textResult(result)
+    }
+
+    private func handleCreateProject(_ args: [String: Value]?) async throws -> CallTool.Result {
+        guard let name = args?["name"]?.stringValue, !name.isEmpty else {
+            throw OFMCPError.invalidInput("'name' is required and must not be empty")
+        }
+
+        var reviewUnit: String?
+        var reviewSteps: Int?
+        if let review = args?["reviewInterval"]?.objectValue {
+            guard let unit = review["unit"]?.stringValue, let steps = review["steps"]?.intValue else {
+                throw OFMCPError.invalidInput("'reviewInterval' requires 'unit' and 'steps'")
+            }
+            reviewUnit = unit
+            reviewSteps = steps
+        }
+
+        let js = JSBuilder.createProject(
+            name: name,
+            note: args?["note"]?.stringValue,
+            singleton: args?["singleton"]?.boolValue,
+            sequential: args?["sequential"]?.boolValue,
+            folderId: args?["folderId"]?.stringValue,
+            folderName: args?["folderName"]?.stringValue,
+            dueDate: args?["dueDate"]?.stringValue,
+            deferDate: args?["deferDate"]?.stringValue,
+            reviewIntervalUnit: reviewUnit,
+            reviewIntervalSteps: reviewSteps
+        )
+
+        let result = try await bridge.evaluateJS(js)
+
+        if result.contains("\"error\"") {
+            throw OFMCPError.omnifocusEvalFailed(result)
+        }
+
+        await cache.invalidateAll()
+        Log.info("Project created: \(name)", tool: "create_project")
 
         return textResult(result)
     }
@@ -580,7 +646,7 @@ actor ToolRouter {
             throw OFMCPError.invalidInput("Failed to build URL")
         }
 
-        await OmniFocusURL.open(url)
+        await bridge.openURL(url)
         Log.info("Task created via URL: \(name)", tool: "create_task_via_url")
 
         // In Pro mode, wait briefly and search for the task to return its ID
@@ -629,7 +695,7 @@ actor ToolRouter {
             throw OFMCPError.invalidInput("Failed to build URL for id '\(id)'")
         }
 
-        await OmniFocusURL.open(url)
+        await bridge.openURL(url)
 
         return textResult(toJSON(["opened": true, "url": url.absoluteString]))
     }
@@ -729,10 +795,67 @@ actor ToolRouter {
             case .bool(let b): dict[key] = b
             case .null: dict[key] = NSNull()
             case .array(let arr): dict[key] = arr.compactMap { $0.stringValue }
+            case .object: dict[key] = valueToDictionary(val)
             default: break
             }
         }
         return dict
+    }
+
+    // MARK: - Repetition Rule Helpers
+
+    private static let validRepetitionMethods: Set<String> = [
+        "fixed", "start-after-completion", "due-after-completion",
+    ]
+
+    /// Parse and validate a `repetitionRule` argument for create_task.
+    /// Returns (ruleString, method) or (nil, nil) when the argument is absent/null.
+    private func parseRepetitionRule(_ value: Value?) throws -> (String?, String?) {
+        guard let value, value.objectValue != nil else { return (nil, nil) }
+        let obj = value.objectValue!
+        try validateRepetitionRule(ruleString: obj["ruleString"]?.stringValue, method: obj["method"]?.stringValue)
+        return (obj["ruleString"]?.stringValue, obj["method"]?.stringValue)
+    }
+
+    /// Validate a repetition rule's fields, throwing a clear error on malformed input
+    /// so we never silently create a non-repeating task.
+    private func validateRepetitionRule(ruleString: String?, method: String?) throws {
+        guard let ruleString, !ruleString.isEmpty else {
+            throw OFMCPError.invalidInput("'repetitionRule.ruleString' is required (ICS RRULE, e.g. 'FREQ=MONTHLY;BYMONTHDAY=26')")
+        }
+        guard ruleString.uppercased().contains("FREQ=") else {
+            throw OFMCPError.invalidInput("'repetitionRule.ruleString' must be a valid ICS RRULE containing FREQ= (e.g. 'FREQ=WEEKLY;BYDAY=MO')")
+        }
+        if let method, !ToolRouter.validRepetitionMethods.contains(method) {
+            throw OFMCPError.invalidInput("'repetitionRule.method' must be one of: fixed, start-after-completion, due-after-completion")
+        }
+    }
+
+    /// Enforce OmniFocus's rule that a repeating task must carry the date its method needs.
+    /// Prevents creating an invalid repeat that triggers an in-app "repeat needs a date" alert.
+    private func validateRepetitionDates(method: String?, hasDue: Bool, hasDefer: Bool) throws {
+        switch method {
+        case "start-after-completion":
+            guard hasDefer else {
+                throw OFMCPError.invalidInput("A 'start-after-completion' repeat requires a defer date (set deferDate).")
+            }
+        case "due-after-completion":
+            guard hasDue else {
+                throw OFMCPError.invalidInput("A 'due-after-completion' repeat requires a due date (set dueDate).")
+            }
+        default: // "fixed" or nil
+            guard hasDue || hasDefer else {
+                throw OFMCPError.invalidInput("A repeat requires a defer date or a due date (set deferDate or dueDate).")
+            }
+        }
+    }
+
+    /// Extract the `message` field from a JS `{error, message}` result, if present.
+    private func jsErrorMessage(_ result: String) -> String? {
+        guard let data = result.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return json["message"] as? String
     }
 }
 

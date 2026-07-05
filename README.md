@@ -79,8 +79,10 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 | Tool | Description |
 |------|-------------|
-| `create_task` | Create task in inbox or project |
-| `update_task` | Patch-based update with dry-run/confirm |
+| `create_task` | Create task in inbox or project (supports repetition rules) |
+| `update_task` | Patch-based update with dry-run/confirm (supports repetition rules) |
+| `create_project` | Create a project, optionally in a folder (created if missing) |
+| `update_project` | Patch-based project update with dry-run/confirm |
 | `batch_update_tasks` | Batch updates (config-gated) |
 
 ### Standard Mode Tools (no Pro required)
@@ -157,6 +159,45 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   }
 }
 ```
+
+### Create a recurring task
+
+```json
+{
+  "name": "create_task",
+  "arguments": {
+    "name": "Pay rent",
+    "projectId": "abc123",
+    "dueDate": "2026-03-26T09:00:00Z",
+    "repetitionRule": {
+      "ruleString": "FREQ=MONTHLY;BYMONTHDAY=26",
+      "method": "fixed"
+    }
+  }
+}
+```
+
+`ruleString` is an ICS RRULE. `method` is one of `fixed`, `start-after-completion`,
+or `due-after-completion`. In an `update_task` patch, pass `"repetitionRule": null` to
+clear a repeat. Request the `repetitionRule` field on reads to inspect existing repeats.
+
+### Create a project
+
+```json
+{
+  "name": "create_project",
+  "arguments": {
+    "name": "Home Maintenance",
+    "folderName": "House",
+    "sequential": false,
+    "reviewInterval": { "unit": "months", "steps": 1 }
+  }
+}
+```
+
+`folderName` is created if it doesn't exist (use `folderId` to target an existing folder).
+Set `singleton: true` for a single-action list. Returns the new project's stable `id`
+for chaining `create_task` calls.
 
 ### Update a task (two-step for destructive changes)
 

@@ -26,6 +26,7 @@ enum ToolSchemas {
             // Mutation tools
             tools.append(createTaskTool)
             tools.append(updateTaskTool)
+            tools.append(createProjectTool)
             tools.append(updateProjectTool)
 
             // Batch tools (config-gated)
@@ -74,12 +75,32 @@ enum ToolSchemas {
                     "id", "name", "note", "status", "flagged", "completed",
                     "dueDate", "deferDate", "estimatedMinutes", "projectName",
                     "tagNames", "tagIds", "url", "parentId", "projectId",
-                    "hasChildren", "sequential", "completionDate", "dropped",
+                    "hasChildren", "sequential", "repetitionRule", "completionDate", "dropped",
                 ].map { Value.string($0) }),
             ]),
             "description": "Fields to include. Default: minimal set (id, name, status, flagged, dueDate)",
         ])
     )
+
+    /// Schema for a repetition (recurrence) rule, shared by create_task and update_task.
+    private static let repetitionRuleSchema: Value = .object([
+        "type": "object",
+        "description": "Recurrence rule. Omit for a non-repeating task. The task must have the date its method needs: a due date for 'due-after-completion', a defer date for 'start-after-completion', or either date for 'fixed'",
+        "properties": .object([
+            "ruleString": .object([
+                "type": "string",
+                "description": "ICS RRULE string, e.g. 'FREQ=MONTHLY;BYMONTHDAY=26' or 'FREQ=WEEKLY;BYDAY=MO'",
+            ]),
+            "method": .object([
+                "type": "string",
+                "enum": .array(["fixed", "start-after-completion", "due-after-completion"].map { Value.string($0) }),
+                "default": "fixed",
+                "description": "How the next occurrence is scheduled. Default 'fixed'",
+            ]),
+        ]),
+        "required": .array([.string("ruleString")]),
+        "additionalProperties": false,
+    ])
 
     // MARK: - Tool Definitions
 
@@ -318,6 +339,7 @@ enum ToolSchemas {
                 "deferDate": .object(["type": "string", "format": "date-time"]),
                 "flagged": .object(["type": "boolean", "default": false]),
                 "estimatedMinutes": .object(["type": "integer", "minimum": 0]),
+                "repetitionRule": repetitionRuleSchema,
             ]),
             "required": .array([.string("name")]),
             "additionalProperties": false,
@@ -347,6 +369,13 @@ enum ToolSchemas {
                             "type": "string",
                             "enum": .array(["complete", "drop", "active"].map { Value.string($0) }),
                             "description": "Transition task status. complete/drop are irreversible and require confirm_token",
+                        ]),
+                        "repetitionRule": .object([
+                            "description": "Set a recurrence rule, or null to clear it",
+                            "oneOf": .array([
+                                repetitionRuleSchema,
+                                .object(["type": "null"]),
+                            ]),
                         ]),
                     ]),
                     "additionalProperties": false,
@@ -405,6 +434,40 @@ enum ToolSchemas {
             "additionalProperties": false,
         ]),
         annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: true, idempotentHint: false)
+    )
+
+    static let createProjectTool = Tool(
+        name: "create_project",
+        description: "Create a new project, optionally inside a folder. Returns the new project's stable ID for chaining create_task calls",
+        inputSchema: .object([
+            "type": "object",
+            "properties": .object([
+                "name": .object(["type": "string", "minLength": 1]),
+                "note": .object(["type": "string"]),
+                "singleton": .object(["type": "boolean", "default": false, "description": "Single-action list (bucket of unrelated actions) instead of a project"]),
+                "sequential": .object(["type": "boolean", "default": false, "description": "Tasks must be done in order. Ignored when singleton is true"]),
+                "folderId": .object(["type": "string", "description": "Target folder ID. Takes precedence over folderName"]),
+                "folderName": .object(["type": "string", "description": "Target folder by name (created if missing). Ignored when folderId is set"]),
+                "dueDate": .object(["type": "string", "format": "date-time"]),
+                "deferDate": .object(["type": "string", "format": "date-time"]),
+                "reviewInterval": .object([
+                    "type": "object",
+                    "description": "How often the project should be reviewed",
+                    "properties": .object([
+                        "unit": .object([
+                            "type": "string",
+                            "enum": .array(["days", "weeks", "months", "years"].map { Value.string($0) }),
+                        ]),
+                        "steps": .object(["type": "integer", "minimum": 1]),
+                    ]),
+                    "required": .array([.string("unit"), .string("steps")]),
+                    "additionalProperties": false,
+                ]),
+            ]),
+            "required": .array([.string("name")]),
+            "additionalProperties": false,
+        ]),
+        annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: false)
     )
 
     static let batchUpdateTasksTool = Tool(

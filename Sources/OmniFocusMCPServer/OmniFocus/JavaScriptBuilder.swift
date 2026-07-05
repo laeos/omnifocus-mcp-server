@@ -353,7 +353,9 @@ enum JSBuilder {
         dueDate: String?,
         deferDate: String?,
         flagged: Bool?,
-        estimatedMinutes: Int?
+        estimatedMinutes: Int?,
+        repetitionRuleString: String? = nil,
+        repetitionMethod: String? = nil
     ) -> String {
         let escapedName = name.jsEscaped
 
@@ -384,6 +386,9 @@ enum JSBuilder {
         if let deferDate { propCode.append("t.deferDate = new Date(\"\(deferDate.jsEscaped)\");") }
         if let flagged { propCode.append("t.flagged = \(flagged);") }
         if let mins = estimatedMinutes { propCode.append("t.estimatedMinutes = \(mins);") }
+        if let repetitionRuleString {
+            propCode.append("t.repetitionRule = new Task.RepetitionRule(\"\(repetitionRuleString.jsEscaped)\", \(repetitionMethodJS(repetitionMethod)));")
+        }
 
         // Tag assignment
         if let tagIds, !tagIds.isEmpty {
@@ -409,11 +414,58 @@ enum JSBuilder {
             return JSON.stringify({
                 id: t.id.primaryKey,
                 name: t.name,
+                repetitionRule: \(repetitionRuleProjection),
                 url: "omnifocus:///task/" + t.id.primaryKey
             });
         })()
         """
     }
+
+    /// JS expression mapping the OmniFocus RepetitionMethod string constant for a given method name.
+    /// Defaults to Fixed for nil or "fixed".
+    private static func repetitionMethodJS(_ method: String?) -> String {
+        switch method {
+        case "start-after-completion": return "Task.RepetitionMethod.DeferUntilDate"
+        case "due-after-completion": return "Task.RepetitionMethod.DueDate"
+        default: return "Task.RepetitionMethod.Fixed"
+        }
+    }
+
+    /// JS boolean expression: will `key` (e.g. "dueDate") be set after this patch applies?
+    /// A string value in the patch sets it, NSNull clears it, absence leaves the existing value.
+    private static func datePresenceExpr(_ patch: [String: Any], key: String) -> String {
+        if patch.keys.contains(key) {
+            return patch[key] is String ? "true" : "false"
+        }
+        return "!!t.\(key)"
+    }
+
+    /// Build a guard clause that returns a structured error if the task won't have the date
+    /// its repetition method requires. Runs before mutations so a rejected update is a no-op.
+    private static func repetitionDateGuard(patch: [String: Any], method: String?) -> String {
+        let due = datePresenceExpr(patch, key: "dueDate")
+        let defer_ = datePresenceExpr(patch, key: "deferDate")
+        let cond: String
+        let message: String
+        switch method {
+        case "start-after-completion":
+            cond = defer_
+            message = "A 'start-after-completion' repeat requires a defer date."
+        case "due-after-completion":
+            cond = due
+            message = "A 'due-after-completion' repeat requires a due date."
+        default: // "fixed" or nil
+            cond = "(\(due) || \(defer_))"
+            message = "A repeat requires a defer date or a due date."
+        }
+        return "if (!\(cond)) return JSON.stringify({error: \"repetition_requires_date\", message: \"\(message.jsEscaped)\"});"
+    }
+
+    /// JS expression that projects a task's `repetitionRule` to `{ruleString, method}` or null.
+    /// Assumes the task variable is named `t`.
+    private static let repetitionRuleProjection = """
+    t.repetitionRule ? {ruleString: t.repetitionRule.ruleString, method: (t.repetitionRule.method === Task.RepetitionMethod.DeferUntilDate ? 'start-after-completion' : (t.repetitionRule.method === Task.RepetitionMethod.DueDate ? 'due-after-completion' : 'fixed'))} : null
+    """
 
     /// Build JS to update a task by ID with patch fields.
     static func updateTask(id: String, patch: [String: Any]) -> String {
@@ -477,6 +529,23 @@ enum JSBuilder {
                 break
             }
         }
+        var repetitionGuard: String?
+        if patch.keys.contains("repetitionRule") {
+            if let rule = patch["repetitionRule"] as? [String: Any],
+               let ruleString = rule["ruleString"] as? String {
+                let method = rule["method"] as? String
+                // Guard against OmniFocus's "repeat needs a date" alert: verify the task will
+                // have the date this method requires (from this patch or already set) BEFORE
+                // mutating anything, so a rejected update leaves the task untouched.
+                repetitionGuard = repetitionDateGuard(patch: patch, method: method)
+                updates.append("t.repetitionRule = new Task.RepetitionRule(\"\(ruleString.jsEscaped)\", \(repetitionMethodJS(method)));")
+            } else {
+                updates.append("t.repetitionRule = null;")
+            }
+        }
+        if let repetitionGuard {
+            updates.insert(repetitionGuard, at: 0)
+        }
 
         let updatesStr = updates.joined(separator: "\n            ")
 
@@ -494,6 +563,7 @@ enum JSBuilder {
                 dueDate: t.dueDate ? t.dueDate.toISOString() : null,
                 projectId: t.containingProject ? t.containingProject.id.primaryKey : null,
                 projectName: t.containingProject ? t.containingProject.name : null,
+                repetitionRule: \(repetitionRuleProjection),
                 url: "omnifocus:///task/" + t.id.primaryKey
             });
         })()
@@ -565,6 +635,76 @@ enum JSBuilder {
         """
     }
 
+    /// Build JS to create a new project, optionally inside a folder.
+    /// A `folderId` resolves an existing folder (error if missing); a `folderName`
+    /// resolves by name or creates the folder if absent (mirroring tagNames on createTask).
+    static func createProject(
+        name: String,
+        note: String?,
+        singleton: Bool?,
+        sequential: Bool?,
+        folderId: String?,
+        folderName: String?,
+        dueDate: String?,
+        deferDate: String?,
+        reviewIntervalUnit: String?,
+        reviewIntervalSteps: Int?
+    ) -> String {
+        let escapedName = name.jsEscaped
+
+        // Resolve the container folder (optional). Leaves `container` null for top-level.
+        var containerCode: String
+        if let folderId {
+            containerCode = """
+            const folder = Folder.byIdentifier("\(folderId.jsEscaped)");
+            if (!folder) return JSON.stringify({error: "not_found", message: "Folder not found"});
+            const container = folder;
+            """
+        } else if let folderName {
+            let escapedFolder = folderName.jsEscaped
+            containerCode = """
+            let container = flattenedFolders.byName("\(escapedFolder)");
+            if (!container) container = new Folder("\(escapedFolder)");
+            """
+        } else {
+            containerCode = "const container = null;"
+        }
+
+        var propCode: [String] = []
+        if let note { propCode.append("p.note = \"\(note.jsEscaped)\";") }
+        if singleton == true {
+            propCode.append("p.containsSingletonActions = true;")
+        } else if let sequential {
+            propCode.append("p.sequential = \(sequential);")
+        }
+        if let dueDate { propCode.append("p.dueDate = new Date(\"\(dueDate.jsEscaped)\");") }
+        if let deferDate { propCode.append("p.deferDate = new Date(\"\(deferDate.jsEscaped)\");") }
+        if let reviewIntervalUnit, let reviewIntervalSteps {
+            // Project.ReviewInterval is not constructible; mutate the project's existing
+            // interval object in place and reassign it.
+            propCode.append("{ const ri = p.reviewInterval; ri.unit = \"\(reviewIntervalUnit.jsEscaped)\"; ri.steps = \(reviewIntervalSteps); p.reviewInterval = ri; }")
+        }
+
+        let propsStr = propCode.joined(separator: "\n            ")
+
+        return """
+        (() => {
+            \(containerCode)
+            const p = container ? new Project("\(escapedName)", container) : new Project("\(escapedName)");
+            \(propsStr)
+            return JSON.stringify({
+                id: p.id.primaryKey,
+                name: p.name,
+                folderId: p.parentFolder ? p.parentFolder.id.primaryKey : null,
+                folderName: p.parentFolder ? p.parentFolder.name : null,
+                sequential: p.sequential,
+                singleton: p.containsSingletonActions,
+                url: "omnifocus:///task/" + p.id.primaryKey
+            });
+        })()
+        """
+    }
+
     // MARK: - Field Projections
 
     private static func taskProjection(_ fields: Set<TaskFieldSet>) -> String {
@@ -590,6 +730,7 @@ enum JSBuilder {
         if fields.contains(.tagNames) { props.append("tagNames: t.tags.map(tag => tag.name)") }
         if fields.contains(.hasChildren) { props.append("hasChildren: t.children.length > 0") }
         if fields.contains(.sequential) { props.append("sequential: t.sequential") }
+        if fields.contains(.repetitionRule) { props.append("repetitionRule: \(repetitionRuleProjection)") }
         if fields.contains(.url) { props.append("url: 'omnifocus:///task/' + t.id.primaryKey") }
 
         return "{\(props.joined(separator: ", "))}"

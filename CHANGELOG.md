@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-05
+
+### Added
+
+- `create_project` tool — create a project, optionally inside a folder (created if missing, mirroring `tagNames`), with `singleton`/`sequential`, defer/due dates, and `reviewInterval`. Returns the new project's stable ID for chaining `create_task`
+- `create_task` and the `update_task` patch now accept a `repetitionRule` (ICS RRULE `ruleString` + `method`); pass `null` in a patch to clear a repeat
+- `repetitionRule` is now a readable task field (`get_task_by_id`, `search_tasks`, etc.)
+
+### Changed
+
+- Bumped MCP Swift SDK from `0.11.0` to `0.12.1` — `0.11.0`'s `NetworkTransport` no longer compiles under Swift 6.3 / Xcode 26 (`SendingRisksDataRace`). Only source impact: `Tool.Content.text` gained associated values
+
+### Fixed
+
+- Repetition rules are validated up front: a repeat method missing its required date (due for `due-after-completion`, defer for `start-after-completion`, either for `fixed`) is rejected with a clear error instead of silently creating an invalid repeat that pops an in-app "repeat needs a date" alert
+- `open_task_url` / `create_task_via_url` now open URLs through the injected bridge, so running the test suite no longer fires `omnifocus://` URLs at the live app
+
 ## [0.2.2] - 2026-03-14
 
 ### Added
@@ -81,6 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Safety controls** — Dry-run defaults, single-use confirm tokens (5-minute TTL), config-gated batch/delete operations, tool allowlist
 - **CI/CD** — GitHub Actions for build/test/lint on push, automated universal binary releases on tag
 
+[0.3.0]: https://github.com/mryanb/omnifocus-mcp-server/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/mryanb/omnifocus-mcp-server/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/mryanb/omnifocus-mcp-server/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/mryanb/omnifocus-mcp-server/compare/v0.1.1...v0.2.0

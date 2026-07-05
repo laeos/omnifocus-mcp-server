@@ -473,6 +473,49 @@ struct JavaScriptBuilderTests {
         #expect(js.contains("slice(0, 20)"))
     }
 
+    // MARK: - Perspective Rules
+
+    @Test("getPerspectiveRules reads rules headlessly with name fallback")
+    func getPerspectiveRules() {
+        let js = JSBuilder.getPerspectiveRules(id: "MyPerspective")
+        #expect(js.contains("Perspective.Custom.byIdentifier(\"MyPerspective\")"))
+        #expect(js.contains("Perspective.Custom.byName(\"MyPerspective\")"))
+        #expect(js.contains("archivedFilterRules"))
+        #expect(js.contains("archivedTopLevelFilterAggregation"))
+        #expect(js.contains("not_found"))
+        assertValidJSSyntax(js)
+    }
+
+    @Test("updatePerspectiveRules writes via the window path and restores")
+    func updatePerspectiveRules() {
+        let js = JSBuilder.updatePerspectiveRules(
+            id: "abc",
+            rulesJSON: "[{\"actionAvailability\":\"available\"},{\"actionHasAnyOfTags\":[\"tag1\"]}]",
+            aggregation: "all"
+        )
+        #expect(js.contains("document.windows"))
+        #expect(js.contains("no_window"))
+        #expect(js.contains("var saved = win.perspective"))
+        #expect(js.contains("win.perspective = target"))
+        #expect(js.contains("win.perspective.archivedFilterRules = [{\"actionAvailability\":\"available\"},{\"actionHasAnyOfTags\":[\"tag1\"]}]"))
+        #expect(js.contains("win.perspective.archivedTopLevelFilterAggregation = \"all\""))
+        // Restores the previously active perspective on both success and error paths
+        #expect(js.contains("win.perspective = saved"))
+        assertValidJSSyntax(js)
+    }
+
+    @Test("updatePerspectiveRules omits aggregation when nil")
+    func updatePerspectiveRulesNoAggregation() {
+        let js = JSBuilder.updatePerspectiveRules(
+            id: "abc",
+            rulesJSON: "[{\"actionAvailability\":\"remaining\"}]",
+            aggregation: nil
+        )
+        #expect(!js.contains("archivedTopLevelFilterAggregation ="))
+        #expect(js.contains("win.perspective.archivedFilterRules = [{\"actionAvailability\":\"remaining\"}]"))
+        assertValidJSSyntax(js)
+    }
+
     @Test("listProjects with status filter")
     func listProjectsActive() {
         let js = JSBuilder.listProjects(

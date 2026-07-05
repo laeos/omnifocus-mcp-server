@@ -294,6 +294,63 @@ enum JSBuilder {
         """
     }
 
+    /// Read a custom perspective's filter rules and top-level aggregation.
+    /// Works headlessly (no open window needed) via byIdentifier/byName.
+    static func getPerspectiveRules(id: String) -> String {
+        let escaped = id.jsEscaped
+        return """
+        (() => {
+            var p = Perspective.Custom.byIdentifier("\(escaped)");
+            if (!p) p = Perspective.Custom.byName("\(escaped)");
+            if (!p) return JSON.stringify({error: "not_found", message: "Custom perspective not found: \(escaped)"});
+            return JSON.stringify({
+                id: p.id.primaryKey,
+                name: p.name,
+                aggregation: p.archivedTopLevelFilterAggregation,
+                rules: p.archivedFilterRules
+            });
+        })()
+        """
+    }
+
+    /// Write a custom perspective's filter rules (and optional aggregation).
+    /// Writes MUST go through the window's active perspective — assigning to a
+    /// byIdentifier/byName instance silently no-ops. Requires an open window.
+    /// Switches to the target, writes, reads back, and restores the prior perspective.
+    static func updatePerspectiveRules(id: String, rulesJSON: String, aggregation: String?) -> String {
+        let escaped = id.jsEscaped
+        let aggLine = aggregation.map {
+            "win.perspective.archivedTopLevelFilterAggregation = \"\($0.jsEscaped)\";"
+        } ?? ""
+        return """
+        (() => {
+            var wins = document.windows;
+            if (!wins || wins.length === 0) return JSON.stringify({error: "no_window", message: "OmniFocus has no open windows. Open a window and try again."});
+            var win = wins[0];
+            var saved = win.perspective;
+            var target = Perspective.Custom.byIdentifier("\(escaped)");
+            if (!target) target = Perspective.Custom.byName("\(escaped)");
+            if (!target) return JSON.stringify({error: "not_found", message: "Custom perspective not found: \(escaped)"});
+            try {
+                win.perspective = target;
+                win.perspective.archivedFilterRules = \(rulesJSON);
+                \(aggLine)
+                var out = JSON.stringify({
+                    id: target.id.primaryKey,
+                    name: target.name,
+                    aggregation: win.perspective.archivedTopLevelFilterAggregation,
+                    rules: win.perspective.archivedFilterRules
+                });
+                win.perspective = saved;
+                return out;
+            } catch (e) {
+                win.perspective = saved;
+                return JSON.stringify({error: "write_failed", message: e.toString()});
+            }
+        })()
+        """
+    }
+
     // MARK: - Project Queries
 
     static func listProjects(

@@ -71,6 +71,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 | `list_tags` | All tags |
 | `list_perspectives` | All built-in and custom perspectives |
 | `get_perspective_tasks` | Tasks from a specific perspective |
+| `get_perspective_rules` | Filter rules + aggregation of a custom perspective |
 | `get_task_by_id` | Single task by stable ID |
 | `search_tasks` | Filtered search with AND logic |
 | `get_task_count` | Count matching tasks without returning data |
@@ -83,6 +84,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 | `update_task` | Patch-based update with dry-run/confirm (supports repetition rules) |
 | `create_project` | Create a project, optionally in a folder (created if missing) |
 | `update_project` | Patch-based project update with dry-run/confirm |
+| `update_perspective_rules` | Replace a custom perspective's filter rules |
 | `batch_update_tasks` | Batch updates (config-gated) |
 
 ### Standard Mode Tools (no Pro required)
@@ -198,6 +200,30 @@ clear a repeat. Request the `repetitionRule` field on reads to inspect existing 
 `folderName` is created if it doesn't exist (use `folderId` to target an existing folder).
 Set `singleton: true` for a single-action list. Returns the new project's stable `id`
 for chaining `create_task` calls.
+
+### Manage a custom perspective's rules
+
+Creating a perspective isn't possible via automation (OmniFocus exposes no
+constructor). Create the empty perspective once in the app, then let automation
+own its rules:
+
+```json
+{
+  "name": "update_perspective_rules",
+  "arguments": {
+    "id": "kAbCдEf1234",
+    "rules": [
+      { "actionAvailability": "available" },
+      { "actionHasAnyOfTags": ["mDzY7pQ_tag"] }
+    ],
+    "aggregation": "all"
+  }
+}
+```
+
+Rules use the Omni Automation archive format. Requires an open OmniFocus window,
+and the perspective may need to be reopened in the app to reflect the change.
+Use `get_perspective_rules` to read the current definition (e.g. to version-control it).
 
 ### Update a task (two-step for destructive changes)
 

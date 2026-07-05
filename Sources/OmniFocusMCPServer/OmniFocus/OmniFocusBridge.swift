@@ -7,6 +7,8 @@ protocol OmniFocusAutomation: Sendable {
     func detectCapability() async -> CapabilityMode
     func isOmniFocusRunning() async -> Bool
     func omniFocusVersion() async -> String?
+    /// Open an omnifocus:// URL. Injected so tests don't fire real URLs at the app.
+    func openURL(_ url: URL) async
 }
 
 enum CapabilityMode: String, Codable, Sendable {
@@ -105,6 +107,11 @@ final class OmniFocusBridge: OmniFocusAutomation, @unchecked Sendable {
     /// Get OmniFocus version string.
     func omniFocusVersion() async -> String? {
         try? await evaluateJS("app.version")
+    }
+
+    /// Open an omnifocus:// URL via NSWorkspace.
+    func openURL(_ url: URL) async {
+        await OmniFocusURL.open(url)
     }
 
     // MARK: - osascript subprocess

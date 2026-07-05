@@ -49,13 +49,15 @@ struct ToolRouterTests {
 
     @Test("standard mode tools work without Pro")
     func standardModePass() async {
-        let (router, _) = await makeRouter(mode: .standard)
+        let (router, bridge) = await makeRouter(mode: .standard)
         let result = await router.handle(name: "open_task_url", arguments: [
             "id": .string("abc123"),
         ])
         // Should not error with capability_unavailable
         let text = extractText(result)
         #expect(!text.contains("capability_unavailable"))
+        // The URL is opened through the injected bridge, not fired at the real app.
+        #expect(bridge.openedURLs.map(\.absoluteString) == ["omnifocus:///task/abc123"])
     }
 
     @Test("get_task_by_id requires id parameter")

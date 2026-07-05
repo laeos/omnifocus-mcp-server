@@ -646,7 +646,7 @@ actor ToolRouter {
             throw OFMCPError.invalidInput("Failed to build URL")
         }
 
-        await OmniFocusURL.open(url)
+        await bridge.openURL(url)
         Log.info("Task created via URL: \(name)", tool: "create_task_via_url")
 
         // In Pro mode, wait briefly and search for the task to return its ID
@@ -695,7 +695,7 @@ actor ToolRouter {
             throw OFMCPError.invalidInput("Failed to build URL for id '\(id)'")
         }
 
-        await OmniFocusURL.open(url)
+        await bridge.openURL(url)
 
         return textResult(toJSON(["opened": true, "url": url.absoluteString]))
     }

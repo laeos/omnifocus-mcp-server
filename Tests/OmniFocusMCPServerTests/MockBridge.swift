@@ -10,6 +10,8 @@ final class MockBridge: OmniFocusAutomation, @unchecked Sendable {
     var lastJS: String?
     var shouldThrow: OFMCPError?
     var callCount: Int = 0
+    /// URLs the router asked to open, recorded instead of fired at the real app.
+    var openedURLs: [URL] = []
 
     func evaluateJS(_ js: String) async throws -> String {
         callCount += 1
@@ -39,5 +41,9 @@ final class MockBridge: OmniFocusAutomation, @unchecked Sendable {
 
     func omniFocusVersion() async -> String? {
         mockVersion
+    }
+
+    func openURL(_ url: URL) async {
+        openedURLs.append(url)
     }
 }

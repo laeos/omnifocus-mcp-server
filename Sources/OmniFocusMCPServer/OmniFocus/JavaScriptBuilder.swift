@@ -431,6 +431,36 @@ enum JSBuilder {
         }
     }
 
+    /// JS boolean expression: will `key` (e.g. "dueDate") be set after this patch applies?
+    /// A string value in the patch sets it, NSNull clears it, absence leaves the existing value.
+    private static func datePresenceExpr(_ patch: [String: Any], key: String) -> String {
+        if patch.keys.contains(key) {
+            return patch[key] is String ? "true" : "false"
+        }
+        return "!!t.\(key)"
+    }
+
+    /// Build a guard clause that returns a structured error if the task won't have the date
+    /// its repetition method requires. Runs before mutations so a rejected update is a no-op.
+    private static func repetitionDateGuard(patch: [String: Any], method: String?) -> String {
+        let due = datePresenceExpr(patch, key: "dueDate")
+        let defer_ = datePresenceExpr(patch, key: "deferDate")
+        let cond: String
+        let message: String
+        switch method {
+        case "start-after-completion":
+            cond = defer_
+            message = "A 'start-after-completion' repeat requires a defer date."
+        case "due-after-completion":
+            cond = due
+            message = "A 'due-after-completion' repeat requires a due date."
+        default: // "fixed" or nil
+            cond = "(\(due) || \(defer_))"
+            message = "A repeat requires a defer date or a due date."
+        }
+        return "if (!\(cond)) return JSON.stringify({error: \"repetition_requires_date\", message: \"\(message.jsEscaped)\"});"
+    }
+
     /// JS expression that projects a task's `repetitionRule` to `{ruleString, method}` or null.
     /// Assumes the task variable is named `t`.
     private static let repetitionRuleProjection = """
@@ -499,14 +529,22 @@ enum JSBuilder {
                 break
             }
         }
+        var repetitionGuard: String?
         if patch.keys.contains("repetitionRule") {
             if let rule = patch["repetitionRule"] as? [String: Any],
                let ruleString = rule["ruleString"] as? String {
                 let method = rule["method"] as? String
+                // Guard against OmniFocus's "repeat needs a date" alert: verify the task will
+                // have the date this method requires (from this patch or already set) BEFORE
+                // mutating anything, so a rejected update leaves the task untouched.
+                repetitionGuard = repetitionDateGuard(patch: patch, method: method)
                 updates.append("t.repetitionRule = new Task.RepetitionRule(\"\(ruleString.jsEscaped)\", \(repetitionMethodJS(method)));")
             } else {
                 updates.append("t.repetitionRule = null;")
             }
+        }
+        if let repetitionGuard {
+            updates.insert(repetitionGuard, at: 0)
         }
 
         let updatesStr = updates.joined(separator: "\n            ")

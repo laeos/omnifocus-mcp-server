@@ -177,6 +177,52 @@ struct JavaScriptBuilderTests {
         assertValidJSSyntax(JSBuilder.updateTask(id: "abc", patch: ["repetitionRule": NSNull()]))
     }
 
+    @Test("updateTask guards repetition against missing date")
+    func updateTaskRepetitionGuard() {
+        // No date in patch → guard checks existing task date
+        let jsExisting = JSBuilder.updateTask(id: "abc", patch: [
+            "repetitionRule": ["ruleString": "FREQ=MONTHLY", "method": "due-after-completion"] as [String: Any],
+        ])
+        #expect(jsExisting.contains("repetition_requires_date"))
+        #expect(jsExisting.contains("if (!!!t.dueDate)"))
+        // Guard must precede the assignment
+        let guardIdx = jsExisting.range(of: "repetition_requires_date")!.lowerBound
+        let assignIdx = jsExisting.range(of: "new Task.RepetitionRule")!.lowerBound
+        #expect(guardIdx < assignIdx)
+
+        // Date set in same patch → guard is satisfied unconditionally (true)
+        let jsWithDate = JSBuilder.updateTask(id: "abc", patch: [
+            "dueDate": "2026-05-01T17:00:00Z",
+            "repetitionRule": ["ruleString": "FREQ=MONTHLY", "method": "due-after-completion"] as [String: Any],
+        ])
+        #expect(jsWithDate.contains("if (!true)"))
+
+        // Date cleared in same patch → guard always fails (false)
+        let jsClearDate = JSBuilder.updateTask(id: "abc", patch: [
+            "dueDate": NSNull(),
+            "repetitionRule": ["ruleString": "FREQ=MONTHLY", "method": "due-after-completion"] as [String: Any],
+        ])
+        #expect(jsClearDate.contains("if (!false)"))
+
+        // Fixed method accepts either date
+        let jsFixed = JSBuilder.updateTask(id: "abc", patch: [
+            "repetitionRule": ["ruleString": "FREQ=WEEKLY", "method": "fixed"] as [String: Any],
+        ])
+        #expect(jsFixed.contains("(!!t.dueDate || !!t.deferDate)"))
+
+        assertValidJSSyntax(jsExisting)
+        assertValidJSSyntax(jsWithDate)
+        assertValidJSSyntax(jsClearDate)
+        assertValidJSSyntax(jsFixed)
+    }
+
+    @Test("updateTask clearing repetition needs no date guard")
+    func updateTaskClearNoGuard() {
+        let js = JSBuilder.updateTask(id: "abc", patch: ["repetitionRule": NSNull()])
+        #expect(js.contains("t.repetitionRule = null;"))
+        #expect(!js.contains("repetition_requires_date"))
+    }
+
     @Test("task projection includes repetitionRule when requested")
     func repetitionRuleProjection() {
         let js = JSBuilder.getTaskById(id: "id1", fields: [.id, .name, .repetitionRule])

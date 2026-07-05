@@ -215,14 +215,56 @@ struct ToolRouterTests {
         #expect(text.contains("FREQ="))
     }
 
-    @Test("create_task accepts valid repetition rule")
+    @Test("create_task accepts valid repetition rule with required date")
     func createTaskGoodRRule() async {
         let (router, _) = await makeRouter()
         let result = await router.handle(name: "create_task", arguments: [
             "name": .string("Pay rent"),
+            "dueDate": .string("2026-03-26T09:00:00Z"),
             "repetitionRule": .object([
                 "ruleString": .string("FREQ=MONTHLY;BYMONTHDAY=26"),
-                "method": .string("fixed"),
+                "method": .string("due-after-completion"),
+            ]),
+        ])
+        let text = extractText(result)
+        #expect(!text.contains("invalid_input"))
+    }
+
+    @Test("create_task rejects due-after-completion repeat without a due date")
+    func createTaskRepeatNoDueDate() async {
+        let (router, _) = await makeRouter()
+        let result = await router.handle(name: "create_task", arguments: [
+            "name": .string("Pay rent"),
+            "repetitionRule": .object([
+                "ruleString": .string("FREQ=MONTHLY"),
+                "method": .string("due-after-completion"),
+            ]),
+        ])
+        let text = extractText(result)
+        #expect(text.contains("invalid_input"))
+        #expect(text.contains("due date"))
+    }
+
+    @Test("create_task rejects fixed repeat with no dates")
+    func createTaskRepeatNoDates() async {
+        let (router, _) = await makeRouter()
+        let result = await router.handle(name: "create_task", arguments: [
+            "name": .string("Water plants"),
+            "repetitionRule": .object(["ruleString": .string("FREQ=WEEKLY")]),
+        ])
+        let text = extractText(result)
+        #expect(text.contains("invalid_input"))
+    }
+
+    @Test("create_task accepts start-after-completion repeat with a defer date")
+    func createTaskRepeatDeferOk() async {
+        let (router, _) = await makeRouter()
+        let result = await router.handle(name: "create_task", arguments: [
+            "name": .string("Review budget"),
+            "deferDate": .string("2026-03-01T09:00:00Z"),
+            "repetitionRule": .object([
+                "ruleString": .string("FREQ=WEEKLY"),
+                "method": .string("start-after-completion"),
             ]),
         ])
         let text = extractText(result)
@@ -238,6 +280,26 @@ struct ToolRouterTests {
         ])
         let text = extractText(result)
         #expect(text.contains("invalid_input"))
+    }
+
+    @Test("update_task surfaces repetition_requires_date as invalid_input")
+    func updateTaskRepeatDateErrorSurfaced() async {
+        let (router, bridge) = await makeRouter()
+        bridge.jsResults["repetition_requires_date"] = """
+        {"error": "repetition_requires_date", "message": "A 'due-after-completion' repeat requires a due date."}
+        """
+        let result = await router.handle(name: "update_task", arguments: [
+            "id": .string("abc"),
+            "patch": .object(["repetitionRule": .object([
+                "ruleString": .string("FREQ=MONTHLY"),
+                "method": .string("due-after-completion"),
+            ])]),
+            "dry_run": .bool(false),
+        ])
+        let text = extractText(result)
+        #expect(text.contains("invalid_input"))
+        #expect(text.contains("due date"))
+        #expect(result.isError == true)
     }
 
     @Test("update_task accepts clearing repetition rule")

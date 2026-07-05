@@ -365,6 +365,15 @@ actor ToolRouter {
         }
 
         let (ruleString, method) = try parseRepetitionRule(args?["repetitionRule"])
+        if ruleString != nil {
+            // OmniFocus requires a matching date for a repeat; validate up front so we
+            // never create a dateless task with an invalid rule (which pops an app alert).
+            try validateRepetitionDates(
+                method: method,
+                hasDue: args?["dueDate"]?.stringValue != nil,
+                hasDefer: args?["deferDate"]?.stringValue != nil
+            )
+        }
 
         let js = JSBuilder.createTask(
             name: name,
@@ -450,8 +459,14 @@ actor ToolRouter {
         let js = JSBuilder.updateTask(id: id, patch: patch)
         let result = try await bridge.evaluateJS(js)
 
-        if result.contains("\"error\"") && result.contains("not_found") {
-            throw OFMCPError.taskNotFound(id)
+        if result.contains("\"error\"") {
+            if result.contains("not_found") {
+                throw OFMCPError.taskNotFound(id)
+            }
+            if result.contains("repetition_requires_date") {
+                throw OFMCPError.invalidInput(jsErrorMessage(result) ?? "This repeat requires a defer date or a due date.")
+            }
+            throw OFMCPError.omnifocusEvalFailed(result)
         }
 
         await cache.invalidateAll()
@@ -814,6 +829,33 @@ actor ToolRouter {
         if let method, !ToolRouter.validRepetitionMethods.contains(method) {
             throw OFMCPError.invalidInput("'repetitionRule.method' must be one of: fixed, start-after-completion, due-after-completion")
         }
+    }
+
+    /// Enforce OmniFocus's rule that a repeating task must carry the date its method needs.
+    /// Prevents creating an invalid repeat that triggers an in-app "repeat needs a date" alert.
+    private func validateRepetitionDates(method: String?, hasDue: Bool, hasDefer: Bool) throws {
+        switch method {
+        case "start-after-completion":
+            guard hasDefer else {
+                throw OFMCPError.invalidInput("A 'start-after-completion' repeat requires a defer date (set deferDate).")
+            }
+        case "due-after-completion":
+            guard hasDue else {
+                throw OFMCPError.invalidInput("A 'due-after-completion' repeat requires a due date (set dueDate).")
+            }
+        default: // "fixed" or nil
+            guard hasDue || hasDefer else {
+                throw OFMCPError.invalidInput("A repeat requires a defer date or a due date (set deferDate or dueDate).")
+            }
+        }
+    }
+
+    /// Extract the `message` field from a JS `{error, message}` result, if present.
+    private func jsErrorMessage(_ result: String) -> String? {
+        guard let data = result.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return json["message"] as? String
     }
 }
 

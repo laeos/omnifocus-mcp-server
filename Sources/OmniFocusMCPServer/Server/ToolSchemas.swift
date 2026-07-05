@@ -85,7 +85,7 @@ enum ToolSchemas {
     /// Schema for a repetition (recurrence) rule, shared by create_task and update_task.
     private static let repetitionRuleSchema: Value = .object([
         "type": "object",
-        "description": "Recurrence rule. Omit for a non-repeating task",
+        "description": "Recurrence rule. Omit for a non-repeating task. The task must have the date its method needs: a due date for 'due-after-completion', a defer date for 'start-after-completion', or either date for 'fixed'",
         "properties": .object([
             "ruleString": .object([
                 "type": "string",

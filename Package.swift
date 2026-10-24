@@ -10,12 +10,14 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.12.1"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.10.1"),
     ],
     targets: [
         .executableTarget(
             name: "OmniFocusMCPServer",
             dependencies: [
                 .product(name: "MCP", package: "swift-sdk"),
+                .product(name: "Logging", package: "swift-log"),
             ],
             path: "Sources/OmniFocusMCPServer"
         ),

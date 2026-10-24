@@ -52,7 +52,7 @@ func startMCPServer() async throws {
     }
 
     // Start stdio transport
-    let transport = StdioTransport()
+    let transport = ClientCapabilityTransport(base: StdioTransport())
     Log.info("Starting stdio transport")
 
     try await server.start(transport: transport) { clientInfo, _ in

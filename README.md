@@ -56,6 +56,21 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
+## Codex Configuration
+
+Add to `~/.codex/config.toml` (use an absolute executable path):
+
+```toml
+[mcp_servers.omnifocus-mcp]
+command = "/Users/YOUR_USER/.private/bin/omnifocus-mcp-server"
+enabled = true
+```
+
+Save and restart the MCP server in Settings. The server includes a compatibility
+adapter for Swift MCP SDK 0.12.1: experimental client capability values that the
+SDK cannot decode are ignored during initialization. Standard capabilities,
+protocol negotiation, and tool requests still use the SDK unchanged.
+
 ## Tools
 
 ### Read Tools (OmniFocus Pro required)
@@ -356,7 +371,7 @@ omnifocus-mcp-server  # Should print "[omnifocus-mcp-server] Starting..." to std
 
 - **MCP version**: `2025-11-25` (pinned)
 - **Transport**: stdio (JSON-RPC, newline-delimited)
-- **SDK**: [modelcontextprotocol/swift-sdk](https://github.com/modelcontextprotocol/swift-sdk) v0.11.0
+- **SDK**: [modelcontextprotocol/swift-sdk](https://github.com/modelcontextprotocol/swift-sdk) v0.12.1
 
 ## License
 
